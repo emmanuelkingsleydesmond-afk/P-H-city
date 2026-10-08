@@ -43,7 +43,10 @@
   body.touch #touchUI { display:block; }
   body.touch #controlsHint { display:none; }
   #joyBase { position:fixed; left:26px; bottom:34px; width:122px; height:122px; border-radius:50%;
-    background:rgba(255,255,255,.08); border:2px solid rgba(255,255,255,.25); z-index:12; pointer-events:none; }
+    background:rgba(255,255,255,.08); border:2px solid rgba(255,255,255,.25); z-index:12; pointer-events:none;
+    opacity:0; transition:opacity .15s; }
+  #joyBase.active { opacity:1; }
+  #btnPause { top:12px; left:50%; right:auto; transform:translateX(-50%); width:54px; height:54px; font-size:12px; }
   #joyKnob { position:absolute; left:50%; top:50%; width:52px; height:52px; margin:-26px 0 0 -26px;
     border-radius:50%; background:rgba(255,255,255,.35); border:2px solid rgba(255,255,255,.55); }
   .tbtn { position:fixed; right:26px; width:72px; height:72px; border-radius:50%;
@@ -90,6 +93,7 @@
   <div id="joyBase"><div id="joyKnob"></div></div>
   <div class="tbtn" id="btnJump">JUMP</div>
   <div class="tbtn" id="btnRun">RUN</div>
+  <div class="tbtn" id="btnPause">&#10074;&#10074;</div>
 </div>
 
 <div id="overlay">
@@ -99,7 +103,7 @@
   <p class="desktop-only">WASD to move · Mouse to look · SHIFT to sprint · SPACE to jump</p>
   <p class="touch-only">🕹️ Left joystick to move · drag the right side to look around · JUMP / RUN buttons on the right</p>
   <p>Collect all 💎 before the stars come out… or just roam free.</p>
-  <div class="start">CLICK TO PLAY</div>
+  <div class="start" id="startBtn">CLICK TO PLAY</div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.149.0/three.min.js"></script>
@@ -212,6 +216,13 @@ const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0 || ma
 const renderer = new THREE.WebGLRenderer({ antialias: !isTouch });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, isTouch ? 1.5 : 2));
+/* enable mobile UI: flag touch devices + safety net for hybrids / desktop-mode browsers */
+if (isTouch){
+  document.body.classList.add('touch');
+  const sb = document.getElementById('startBtn');
+  if (sb) sb.textContent = 'TAP TO PLAY';
+}
+addEventListener('touchstart', ()=>document.body.classList.add('touch'), { once:true, passive:true });
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.getElementById('game').appendChild(renderer.domElement);
@@ -964,7 +975,7 @@ let locked = false, playing = false;
 function startGame(){
   playing = true;
   overlay.classList.add('hidden');
-  if (!isTouch && !locked) renderer.domElement.requestPointerLock();
+  if (matchMedia('(pointer:fine)').matches && !locked) renderer.domElement.requestPointerLock();
 }
 overlay.addEventListener('click', startGame);
 overlay.addEventListener('touchend', e=>{ e.preventDefault(); startGame(); });
@@ -972,7 +983,7 @@ document.addEventListener('pointerlockchange', ()=>{
   locked = document.pointerLockElement === renderer.domElement;
   if (!isTouch){ playing = locked; overlay.classList.toggle('hidden', locked); }
 });
-renderer.domElement.addEventListener('click', ()=>{ if(!isTouch && !locked) renderer.domElement.requestPointerLock(); });
+renderer.domElement.addEventListener('click', ()=>{ if(matchMedia('(pointer:fine)').matches && !locked) renderer.domElement.requestPointerLock(); });
 
 /* ---- look (mouse, desktop) ---- */
 addEventListener('mousemove', e=>{
@@ -981,23 +992,41 @@ addEventListener('mousemove', e=>{
   pState.pitch  = clamp(pState.pitch + e.movementY * 0.0022, -0.15, 1.1);
 });
 
-/* ---- touch controls (joystick + look-drag + buttons) ---- */
-const joy = { id:null, dx:0, dy:0 };
+/* ---- touch controls: floating joystick + look-drag + pinch zoom + buttons ---- */
+const joy = { id:null, ox:0, oy:0, dx:0, dy:0 };
 let lookId = null, lookX = 0, lookY = 0;
+let pinchId = null, pinchX = 0, pinchY = 0, pinchD = 0;
 let jumpHeld = false, runOn = false;
 const joyBase = document.getElementById('joyBase');
 const joyKnob = document.getElementById('joyKnob');
 function setKnob(dx, dy){ joyKnob.style.transform = 'translate(' + dx + 'px,' + dy + 'px)'; }
+function joyShow(x, y){
+  joyBase.style.left = (x - 61) + 'px';
+  joyBase.style.top  = (y - 61) + 'px';
+  joyBase.style.bottom = 'auto';
+  joyBase.classList.add('active');
+}
+function joyHide(){
+  joyBase.classList.remove('active');
+  joy.dx = 0; joy.dy = 0;
+  setKnob(0, 0);
+}
 if (isTouch){
   document.addEventListener('touchstart', e=>{
     e.preventDefault();
     for (const t of e.changedTouches){
-      const r = joyBase.getBoundingClientRect();
-      const jx = r.left + r.width/2, jy = r.top + r.height/2;
-      if (joy.id === null && Math.hypot(t.clientX - jx, t.clientY - jy) < r.width * 1.25){
+      if (t.target.closest('.tbtn') || t.target.closest('#overlay')) continue;
+      if (joy.id === null && t.clientX < innerWidth * 0.45){
+        /* floating joystick: spawns wherever the left thumb lands */
         joy.id = t.identifier;
-      } else if (lookId === null && !t.target.closest('#btnJump') && !t.target.closest('#btnRun') && !t.target.closest('#overlay')){
+        joy.ox = t.clientX; joy.oy = t.clientY;
+        joyShow(t.clientX, t.clientY);
+      } else if (lookId === null){
         lookId = t.identifier; lookX = t.clientX; lookY = t.clientY;
+      } else if (pinchId === null){
+        /* second finger on the right side = camera zoom pinch */
+        pinchId = t.identifier; pinchX = t.clientX; pinchY = t.clientY;
+        pinchD = Math.hypot(lookX - pinchX, lookY - pinchY);
       }
     }
   }, { passive:false });
@@ -1005,9 +1034,8 @@ if (isTouch){
     e.preventDefault();
     for (const t of e.changedTouches){
       if (t.identifier === joy.id){
-        const r = joyBase.getBoundingClientRect();
-        let dx = t.clientX - (r.left + r.width/2), dy = t.clientY - (r.top + r.height/2);
-        const m = Math.hypot(dx, dy), max = r.width/2;
+        let dx = t.clientX - joy.ox, dy = t.clientY - joy.oy;
+        const m = Math.hypot(dx, dy), max = 55;
         if (m > max){ dx = dx/m*max; dy = dy/m*max; }
         joy.dx = dx/max; joy.dy = dy/max;
         setKnob(dx, dy);
@@ -1015,13 +1043,26 @@ if (isTouch){
         pState.yaw   -= (t.clientX - lookX) * 0.0052;
         pState.pitch  = clamp(pState.pitch + (t.clientY - lookY) * 0.0042, -0.15, 1.1);
         lookX = t.clientX; lookY = t.clientY;
+        if (pinchId !== null){
+          const d = Math.hypot(lookX - pinchX, lookY - pinchY);
+          if (pinchD > 10 && d > 10) pState.camDist = clamp(pState.camDist * (pinchD / d), 5, 18);
+          pinchD = d;
+        }
+      } else if (t.identifier === pinchId){
+        pinchX = t.clientX; pinchY = t.clientY;
+        if (lookId !== null){
+          const d = Math.hypot(lookX - pinchX, lookY - pinchY);
+          if (pinchD > 10 && d > 10) pState.camDist = clamp(pState.camDist * (pinchD / d), 5, 18);
+          pinchD = d;
+        }
       }
     }
   }, { passive:false });
   const endTouch = e=>{
     for (const t of e.changedTouches){
-      if (t.identifier === joy.id){ joy.id = null; joy.dx = 0; joy.dy = 0; setKnob(0, 0); }
-      if (t.identifier === lookId) lookId = null;
+      if (t.identifier === joy.id){ joy.id = null; joyHide(); }
+      if (t.identifier === lookId){ lookId = null; pinchId = null; pinchD = 0; }
+      if (t.identifier === pinchId){ pinchId = null; pinchD = 0; }
     }
   };
   document.addEventListener('touchend', endTouch);
@@ -1029,9 +1070,29 @@ if (isTouch){
   const bj = document.getElementById('btnJump');
   bj.addEventListener('touchstart', e=>{ e.preventDefault(); e.stopPropagation(); jumpHeld = true; }, { passive:false });
   bj.addEventListener('touchend',   e=>{ e.preventDefault(); jumpHeld = false; });
+  bj.addEventListener('touchcancel', ()=>{ jumpHeld = false; });
   const br = document.getElementById('btnRun');
   br.addEventListener('touchstart', e=>{ e.preventDefault(); e.stopPropagation(); runOn = !runOn; br.classList.toggle('on', runOn); }, { passive:false });
+  const bp = document.getElementById('btnPause');
+  bp.addEventListener('touchstart', e=>{
+    e.preventDefault(); e.stopPropagation();
+    if (playing){
+      playing = false;
+      overlay.classList.remove('hidden');
+      const sb = document.getElementById('startBtn');
+      if (sb) sb.textContent = 'TAP TO RESUME';
+    }
+  }, { passive:false });
 }
+/* auto-pause when the tab / app goes to the background */
+document.addEventListener('visibilitychange', ()=>{
+  if (document.hidden && playing){
+    playing = false;
+    overlay.classList.remove('hidden');
+    const sb = document.getElementById('startBtn');
+    if (sb) sb.textContent = isTouch ? 'TAP TO RESUME' : 'CLICK TO RESUME';
+  }
+});
 addEventListener('contextmenu', e=> e.preventDefault());
 addEventListener('gesturestart', e=> e.preventDefault());
 
