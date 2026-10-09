@@ -3,28 +3,45 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Mobile WebGL Open World</title>
+    <title>Fixed Open World Game</title>
     <style>
         body {
             margin: 0;
             overflow: hidden;
-            background-color: #87ceeb;
-            font-family: sans-serif;
-            touch-action: none; /* Prevents mobile browser scrolling */
+            background-color: #1a202c;
+            font-family: Arial, sans-serif;
+            touch-action: none;
+            -webkit-user-select: none;
+            user-select: none;
         }
         #canvas-container {
             width: 100vw;
             height: 100vh;
+            display: block;
         }
-        /* Touch UI Overlay */
-        #joystick-container {
+        /* Top UI Panels */
+        #ui-top-left {
             position: absolute;
-            bottom: 30px;
-            left: 30px;
+            top: 15px;
+            left: 15px;
+            background: rgba(0, 0, 0, 0.65);
+            padding: 10px 14px;
+            border-radius: 8px;
+            color: #ffffff;
+            font-size: 12px;
+            line-height: 1.5;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            pointer-events: none;
+        }
+        /* Touch Joystick Overlay */
+        #joystick-zone {
+            position: absolute;
+            bottom: 40px;
+            left: 40px;
             width: 120px;
             height: 120px;
-            background: rgba(255, 255, 255, 0.2);
-            border: 2px solid rgba(255, 255, 255, 0.5);
+            background: rgba(255, 255, 255, 0.15);
+            border: 2px solid rgba(255, 255, 255, 0.4);
             border-radius: 50%;
             touch-action: none;
         }
@@ -34,206 +51,155 @@
             left: 35px;
             width: 50px;
             height: 50px;
-            background: rgba(255, 255, 255, 0.8);
+            background: rgba(0, 255, 204, 0.8);
             border-radius: 50%;
-        }
-        #stats {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            color: white;
-            text-shadow: 1px 1px 2px black;
-            font-size: 14px;
+            box-shadow: 0 0 10px rgba(0, 255, 204, 0.5);
         }
     </style>
-    <!-- Load Three.js 3D Engine -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
 
-    <div id="stats">Online Players: 1 | FPS: <span id="fps">60</span></div>
+    <div id="ui-top-left">
+        <div>💎 Gems: <span id="gems">0/15</span></div>
+        <div>☀️ Time: <span id="time">Day</span></div>
+        <div>⚡ Energy: 100%</div>
+    </div>
+
     <div id="canvas-container"></div>
 
-    <!-- On-screen joystick for Android touch control -->
-    <div id="joystick-container">
+    <div id="joystick-zone">
         <div id="joystick-knob"></div>
     </div>
 
     <script>
-        // --- 1. SCENE SETUP ---
+        // --- SCENE & RENDERER SETUP ---
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x87ceeb);
-        scene.fog = new THREE.FogExp2(0x87ceeb, 0.015); // Fog hides chunk loading boundaries
+        scene.background = new THREE.Color(0x1a233a); // Darker blue atmosphere to fix whiteout
+        scene.fog = new THREE.FogExp2(0x1a233a, 0.012);
 
         const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-        const renderer = new THREE.WebGLRenderer({ antialias: false }); // Disable MSAA for mobile speed
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Dynamic mobile resolution
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.toneMapping = THREE.ACESFilmicToneMapping; // Fixes white overexposure
+        renderer.toneMappingExposure = 0.8;
         document.getElementById('canvas-container').appendChild(renderer.domElement);
 
-        // Lighting
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        // --- BALANCED LIGHTING (FIXES OVEREXPOSURE) ---
+        const ambientLight = new THREE.AmbientLight(0xddeeff, 0.35); // Lowered ambient energy
         scene.add(ambientLight);
-        const sunLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        sunLight.position.set(50, 100, 50);
+
+        const sunLight = new THREE.DirectionalLight(0xfffaed, 0.8);
+        sunLight.position.set(30, 50, 20);
         scene.add(sunLight);
 
-        // --- 2. PLAYER & AVATAR SETUP ---
+        // --- GROUND / TERRAIN (CORRECTED GREEN MATERIAL) ---
+        const groundGeo = new THREE.PlaneGeometry(300, 300, 32, 32);
+        groundGeo.rotateX(-Math.PI / 2);
+        
+        // Ground material with standard lighting reflection
+        const groundMat = new THREE.MeshStandardMaterial({ 
+            color: 0x2e6f40, // Proper green ground color
+            roughness: 0.8,
+            metalness: 0.1
+        });
+        const ground = new THREE.Mesh(groundGeo, groundMat);
+        scene.add(ground);
+
+        // Visual Grid overlay on terrain to make movement obvious
+        const gridHelper = new THREE.GridHelper(300, 60, 0x448844, 0x225522);
+        gridHelper.position.y = 0.01;
+        scene.add(gridHelper);
+
+        // --- PLAYER AVATAR ---
         const playerGroup = new THREE.Group();
         scene.add(playerGroup);
 
-        // Simple Low-Poly Player Mesh
-        const bodyGeo = new THREE.CylinderGeometry(0.4, 0.4, 1.6, 8);
-        const bodyMat = new THREE.MeshLambertMaterial({ color: 0x00ffcc });
-        const playerMesh = new THREE.Mesh(bodyGeo, bodyMat);
-        playerMesh.position.y = 0.8;
-        playerGroup.add(playerMesh);
+        const bodyGeo = new THREE.CylinderGeometry(0.4, 0.5, 1.4, 16);
+        const bodyMat = new THREE.MeshStandardMaterial({ color: 0x00d2ff, roughness: 0.3 });
+        const bodyMesh = new THREE.Mesh(bodyGeo, bodyMat);
+        bodyMesh.position.y = 0.7;
+        playerGroup.add(bodyMesh);
 
-        camera.position.set(0, 3, 7);
+        const hatGeo = new THREE.ConeGeometry(0.5, 0.3, 16);
+        const hatMat = new THREE.MeshStandardMaterial({ color: 0x111122 });
+        const hatMesh = new THREE.Mesh(hatGeo, hatMat);
+        hatMesh.position.y = 1.5;
+        playerGroup.add(hatMesh);
+
+        // Third-person camera follow relative position
+        camera.position.set(0, 4, 8);
         playerGroup.add(camera);
         camera.lookAt(0, 1, 0);
 
-        // --- 3. INFINITE TERRAIN CHUNK SYSTEM ---
-        const CHUNK_SIZE = 40;
-        const RENDER_DISTANCE = 2; // Keep low for Android performance
-        const chunks = new Map();
-
-        function getChunkKey(x, z) {
-            return `${x},${z}`;
-        }
-
-        function createTerrainChunk(chunkX, chunkZ) {
-            const geometry = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, 10, 10);
-            geometry.rotateX(-Math.PI / 2);
-
-            // Generate simple procedural height mapping
-            const pos = geometry.attributes.position;
-            for (let i = 0; i < pos.count; i++) {
-                const vx = pos.getX(i) + chunkX * CHUNK_SIZE;
-                const vz = pos.getZ(i) + chunkZ * CHUNK_SIZE;
-                const vy = Math.sin(vx * 0.05) * Math.cos(vz * 0.05) * 2; // Simple hill formula
-                pos.setY(i, vy);
-            }
-            geometry.computeVertexNormals();
-
-            const material = new THREE.MeshLambertMaterial({ color: 0x3b7a3b, wireframe: false });
-            const mesh = new THREE.Mesh(geometry, material);
-            mesh.position.set(chunkX * CHUNK_SIZE, 0, chunkZ * CHUNK_SIZE);
-            scene.add(mesh);
-
-            return mesh;
-        }
-
-        function updateTerrain() {
-            const currentChunkX = Math.floor(playerGroup.position.x / CHUNK_SIZE);
-            const currentChunkZ = Math.floor(playerGroup.position.z / CHUNK_SIZE);
-
-            const activeKeys = new Set();
-
-            for (let x = -RENDER_DISTANCE; x <= RENDER_DISTANCE; x++) {
-                for (let z = -RENDER_DISTANCE; z <= RENDER_DISTANCE; z++) {
-                    const cx = currentChunkX + x;
-                    const cz = currentChunkZ + z;
-                    const key = getChunkKey(cx, cz);
-                    activeKeys.add(key);
-
-                    if (!chunks.has(key)) {
-                        chunks.set(key, createTerrainChunk(cx, cz));
-                    }
-                }
-            }
-
-            // Unload distant terrain to free up mobile memory
-            for (let [key, chunkMesh] of chunks.entries()) {
-                if (!activeKeys.has(key)) {
-                    scene.remove(chunkMesh);
-                    chunkMesh.geometry.dispose();
-                    chunkMesh.material.dispose();
-                    chunks.delete(key);
-                }
-            }
-        }
-
-        // --- 4. TOUCH JOYSTICK CONTROLLER ---
-        let joystickInput = { x: 0, y: 0 };
-        const joystick = document.getElementById('joystick-container');
+        // --- TOUCH JOYSTICK CONTROLS ---
+        let input = { x: 0, y: 0 };
+        const zone = document.getElementById('joystick-zone');
         const knob = document.getElementById('joystick-knob');
-        let touchId = null;
+        let activeTouchId = null;
 
-        joystick.addEventListener('touchstart', (e) => {
-            touchId = e.changedTouches[0].identifier;
-            handleJoystickMove(e.changedTouches[0]);
+        zone.addEventListener('touchstart', (e) => {
+            activeTouchId = e.changedTouches[0].identifier;
+            updateJoystick(e.changedTouches[0]);
         }, { passive: true });
 
         window.addEventListener('touchmove', (e) => {
-            if (touchId === null) return;
+            if (activeTouchId === null) return;
             for (let touch of e.changedTouches) {
-                if (touch.identifier === touchId) {
-                    handleJoystickMove(touch);
-                }
+                if (touch.identifier === activeTouchId) updateJoystick(touch);
             }
         }, { passive: true });
 
-        window.addEventListener('touchend', (e) => {
-            for (let touch of e.changedTouches) {
-                if (touch.identifier === touchId) {
-                    touchId = null;
-                    knob.style.top = '35px';
-                    knob.style.left = '35px';
-                    joystickInput = { x: 0, y: 0 };
-                }
-            }
-        }, { passive: true });
+        const resetJoystick = () => {
+            activeTouchId = null;
+            knob.style.top = '35px';
+            knob.style.left = '35px';
+            input = { x: 0, y: 0 };
+        };
 
-        function handleJoystickMove(touch) {
-            const rect = joystick.getBoundingClientRect();
-            const centerX = rect.left + rect.width / 2;
-            const centerY = rect.top + rect.height / 2;
+        window.addEventListener('touchend', resetJoystick, { passive: true });
+        window.addEventListener('touchcancel', resetJoystick, { passive: true });
 
-            let deltaX = touch.clientX - centerX;
-            let deltaY = touch.clientY - centerY;
-            const distance = Math.min(Math.hypot(deltaX, deltaY), 45);
+        function updateJoystick(touch) {
+            const rect = zone.getBoundingClientRect();
+            const cx = rect.left + rect.width / 2;
+            const cy = rect.top + rect.height / 2;
+            let dx = touch.clientX - cx;
+            let dy = touch.clientY - cy;
+            const dist = Math.min(Math.hypot(dx, dy), 40);
+            const angle = Math.atan2(dy, dx);
 
-            const angle = Math.atan2(deltaY, deltaX);
-            const moveX = Math.cos(angle) * distance;
-            const moveY = Math.sin(angle) * distance;
+            const mx = Math.cos(angle) * dist;
+            const my = Math.sin(angle) * dist;
 
-            knob.style.left = `${35 + moveX}px`;
-            knob.style.top = `${35 + moveY}px`;
+            knob.style.left = `${35 + mx}px`;
+            knob.style.top = `${35 + my}px`;
 
-            joystickInput.x = moveX / 45; // Normalized (-1 to 1)
-            joystickInput.y = moveY / 45;
+            input.x = mx / 40;
+            input.y = my / 40;
         }
 
-        // --- 5. GAME LOOP & MOVEMENT ---
-        const moveSpeed = 0.15;
+        // --- MAIN LOOP ---
+        const speed = 0.12;
         function animate() {
             requestAnimationFrame(animate);
 
-            if (Math.abs(joystickInput.x) > 0.1 || Math.abs(joystickInput.y) > 0.1) {
-                // Rotate player towards movement direction
-                const angle = Math.atan2(-joystickInput.x, -joystickInput.y);
-                playerGroup.rotation.y = angle;
-
-                // Move player forward
-                playerGroup.translateZ(-moveSpeed);
-
-                // Update world streaming
-                updateTerrain();
+            if (Math.abs(input.x) > 0.05 || Math.abs(input.y) > 0.05) {
+                const moveAngle = Math.atan2(-input.x, -input.y);
+                playerGroup.rotation.y = moveAngle;
+                playerGroup.translateZ(-speed);
             }
 
             renderer.render(scene, camera);
         }
 
-        // Adjust canvas on window resize / orientation change
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
 
-        // Initialize world
-        updateTerrain();
         animate();
     </script>
 </body>
